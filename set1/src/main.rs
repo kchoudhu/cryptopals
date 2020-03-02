@@ -1,13 +1,42 @@
 #[derive(Debug, PartialEq)]
 enum CPError {
     InputParseError,
-
+    InvalidInputError,
 }
 
 #[derive(Debug, PartialEq)]
 struct AppError {
     kind: CPError,
     message: String,
+}
+
+fn str_to_hex(hex_in: String) -> Result<Vec<u8>, AppError> {
+    let mut hex_u8s = Vec::new();
+    for (i, _u) in hex_in.chars().enumerate().step_by(2) {
+        let hex_u8_raw = match hex_in.get(i..i + 2) {
+            Some(hex_u8_raw) => hex_u8_raw,
+            None => {
+                return Err(AppError {
+                    kind: CPError::InputParseError,
+                    message: format!("Incomplete hex dected at [{}]", i),
+                })
+            }
+        };
+
+        let hex_u8 = match u8::from_str_radix(hex_u8_raw, 16) {
+            Ok(hex_u8) => hex_u8,
+            Err(e) => {
+                return Err(AppError {
+                    kind: CPError::InputParseError,
+                    message: format!("Error parsing hex symbol[{}]@[{}]: {}", hex_u8_raw, i, e),
+                })
+            }
+        };
+
+        hex_u8s.push(hex_u8);
+    }
+
+    Ok(hex_u8s)
 }
 
 fn hex_to_base64(hex_in: String) -> Result<String, AppError> {
@@ -22,28 +51,7 @@ fn hex_to_base64(hex_in: String) -> Result<String, AppError> {
         '2', '3', '4', '5', '6', '7', '8', '9', '+', '/', '=',
     ];
 
-    let mut hex_u8s = Vec::new();
-    for (i, _u) in hex_in.chars().enumerate().step_by(2) {
-        let hex_u8_raw = match hex_in.get(i..i + 2) {
-            Some(hex_u8_raw) => hex_u8_raw,
-            None =>
-                return Err(AppError {
-                    kind: CPError::InputParseError,
-                    message: format!("Incomplete hex dected at [{}]", i),
-                })
-        };
-
-        let hex_u8 = match u8::from_str_radix(hex_u8_raw, 16) {
-            Ok(hex_u8) => hex_u8,
-            Err(e) =>
-                return Err(AppError {
-                    kind: CPError::InputParseError,
-                    message: format!("Error parsing hex symbol[{}]@[{}]: {}", hex_u8_raw, i, e),
-                })
-        };
-
-        hex_u8s.push(hex_u8);
-    }
+    let hex_u8s = str_to_hex(hex_in)?;
 
     // Alias -- we'll be using it a lot
     let h = &hex_u8s;
@@ -78,7 +86,7 @@ fn hex_to_base64(hex_in: String) -> Result<String, AppError> {
                     s3 = h[i + 1] << 4 >> 2;
                     s4 = 64;
                 }
-                _ => panic!("Not sure how we're getting here")
+                _ => panic!("Not sure how we're getting here"),
             }
         }
 
@@ -92,19 +100,56 @@ fn hex_to_base64(hex_in: String) -> Result<String, AppError> {
     Ok(b64_out)
 }
 
+fn xor(hex_1: String, hex_2: String) -> Result<String, AppError> {
+    let mut xor_out = String::new();
+
+    let hex_1_u8s = str_to_hex(hex_1)?;
+    let hex_2_u8s = str_to_hex(hex_2)?;
+
+    if hex_1_u8s.len() != hex_2_u8s.len() {
+        return Err(AppError {
+            kind: CPError::InvalidInputError,
+            message: format!(
+                "Provided hex strings are different lengths: {} vs {}",
+                hex_1_u8s.len(),
+                hex_2_u8s.len()
+            ),
+        });
+    }
+
+    for i in 0..hex_1_u8s.len() {
+        for c in format!("{:x}", hex_1_u8s[i] ^ hex_2_u8s[i]).chars() {
+            xor_out.push(c);
+        }
+    }
+
+    Ok(xor_out)
+}
+
 #[cfg(test)]
 mod set1_tests {
 
     use super::*;
 
     #[test]
-    fn test_hex_to_b64_no_padding() {
+    fn test_1_1_hex_to_b64_no_padding() {
         let hex_in =
             String::from("49276d206b696c6c696e6720796f757220627261696e206c696b65206120706f69736f6e6f7573206d757368726f6f6d");
         let b64_expected =
             String::from("SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t");
 
         assert_eq!(hex_to_base64(hex_in).unwrap(), b64_expected);
+    }
+
+    #[test]
+    fn test_1_2_xor() {
+        let hex_1 = String::from("1c0111001f010100061a024b53535009181c");
+        let hex_2 = String::from("686974207468652062756c6c277320657965");
+
+        // "the kid don\'t play", lol
+        let hex_expected = String::from("746865206b696420646f6e277420706c6179");
+
+        assert_eq!(xor(hex_1, hex_2).unwrap(), hex_expected)
     }
 
     #[test]
@@ -135,7 +180,10 @@ mod set1_tests {
             Ok(_v) => panic!("This cannot be"),
             Err(e) => {
                 assert_eq!(e.kind, CPError::InputParseError);
-                assert_eq!(e.message, "Error parsing hex symbol[4x]@[0]: invalid digit found in string");
+                assert_eq!(
+                    e.message,
+                    "Error parsing hex symbol[4x]@[0]: invalid digit found in string"
+                );
             }
         }
 
